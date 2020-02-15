@@ -3,11 +3,8 @@ package stackdriver
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
-	"github.com/go-stack/stack"
 	"github.com/sirupsen/logrus"
 )
 
@@ -102,33 +99,6 @@ func NewFormatter(options ...Option) *Formatter {
 	return &fmtr
 }
 
-func (f *Formatter) errorOrigin() (stack.Call, error) {
-	skip := func(pkg string) bool {
-		for _, skip := range f.StackSkip {
-			if pkg == skip {
-				return true
-			}
-		}
-		return false
-	}
-
-	// We start at 2 to skip this call and our caller's call.
-	for i := 2; ; i++ {
-		c := stack.Caller(i)
-		// ErrNoFunc indicates we're over traversing the stack.
-		if _, err := c.MarshalText(); err != nil {
-			return stack.Call{}, nil
-		}
-		pkg := fmt.Sprintf("%+k", c)
-		// Remove vendoring from package path.
-		parts := strings.SplitN(pkg, "/vendor/", 2)
-		pkg = parts[len(parts)-1]
-		if !skip(pkg) {
-			return c, nil
-		}
-	}
-}
-
 // Format formats a logrus entry according to the Stackdriver specifications.
 func (f *Formatter) Format(e *logrus.Entry) ([]byte, error) {
 	severity := levelsToSeverity[e.Level]
@@ -146,41 +116,36 @@ func (f *Formatter) Format(e *logrus.Entry) ([]byte, error) {
 		ee.Timestamp = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	switch severity {
-	case severityError, severityCritical, severityAlert:
-		ee.ServiceContext = &serviceContext{
-			Service: f.Service,
-			Version: f.Version,
+	ee.ServiceContext = &serviceContext{
+		Service: f.Service,
+		Version: f.Version,
+	}
+
+	// When using WithError(), the error is sent separately, but Error
+	// Reporting expects it to be a part of the message so we append it
+	// instead.
+	if err, ok := ee.Context.Data["error"]; ok {
+		ee.Message = fmt.Sprintf("%s: %s", e.Message, err)
+		delete(ee.Context.Data, "error")
+	} else {
+		ee.Message = e.Message
+	}
+
+	// As a convenience, when using supplying the httpRequest field, it
+	// gets special care.
+	if reqData, ok := ee.Context.Data["httpRequest"]; ok {
+		if req, ok := reqData.(map[string]interface{}); ok {
+			ee.Context.HTTPRequest = req
+			delete(ee.Context.Data, "httpRequest")
 		}
+	}
 
-		// When using WithError(), the error is sent separately, but Error
-		// Reporting expects it to be a part of the message so we append it
-		// instead.
-		if err, ok := ee.Context.Data["error"]; ok {
-			ee.Message = fmt.Sprintf("%s: %s", e.Message, err)
-			delete(ee.Context.Data, "error")
-		} else {
-			ee.Message = e.Message
-		}
-
-		// As a convenience, when using supplying the httpRequest field, it
-		// gets special care.
-		if reqData, ok := ee.Context.Data["httpRequest"]; ok {
-			if req, ok := reqData.(map[string]interface{}); ok {
-				ee.Context.HTTPRequest = req
-				delete(ee.Context.Data, "httpRequest")
-			}
-		}
-
-		// Extract report location from call stack.
-		if c, err := f.errorOrigin(); err == nil {
-			lineNumber, _ := strconv.ParseInt(fmt.Sprintf("%d", c), 10, 64)
-
-			ee.Context.ReportLocation = &reportLocation{
-				FilePath:     fmt.Sprintf("%+s", c),
-				LineNumber:   int(lineNumber),
-				FunctionName: fmt.Sprintf("%n", c),
-			}
+	// Extract report location from call stack.
+	if e.Caller != nil {
+		ee.Context.ReportLocation = &reportLocation{
+			FilePath:     e.Caller.File,
+			LineNumber:   e.Caller.Line,
+			FunctionName: e.Caller.Function,
 		}
 	}
 
