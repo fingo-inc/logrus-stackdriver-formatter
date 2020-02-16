@@ -51,6 +51,8 @@ type entry struct {
 	Timestamp      string          `json:"timestamp,omitempty"`
 	ServiceContext *serviceContext `json:"serviceContext,omitempty"`
 	Message        string          `json:"message,omitempty"`
+	StackTrace     string          `json:"stack_trace,omitempty"`
+	Exception      string          `json:"exception,omitempty"`
 	Severity       severity        `json:"severity,omitempty"`
 	Context        *context        `json:"context,omitempty"`
 }
@@ -59,7 +61,6 @@ type entry struct {
 type Formatter struct {
 	Service   string
 	Version   string
-	StackSkip []string
 }
 
 // Option lets you configure the Formatter.
@@ -79,20 +80,9 @@ func WithVersion(v string) Option {
 	}
 }
 
-// WithStackSkip lets you configure which packages should be skipped for locating the error.
-func WithStackSkip(v string) Option {
-	return func(f *Formatter) {
-		f.StackSkip = append(f.StackSkip, v)
-	}
-}
-
 // NewFormatter returns a new Formatter.
 func NewFormatter(options ...Option) *Formatter {
-	fmtr := Formatter{
-		StackSkip: []string{
-			"github.com/sirupsen/logrus",
-		},
-	}
+	fmtr := Formatter{}
 	for _, option := range options {
 		option(&fmtr)
 	}
@@ -104,7 +94,6 @@ func (f *Formatter) Format(e *logrus.Entry) ([]byte, error) {
 	severity := levelsToSeverity[e.Level]
 
 	ee := entry{
-
 		Message:  e.Message,
 		Severity: severity,
 		Context: &context{
@@ -119,6 +108,11 @@ func (f *Formatter) Format(e *logrus.Entry) ([]byte, error) {
 	ee.ServiceContext = &serviceContext{
 		Service: f.Service,
 		Version: f.Version,
+	}
+
+	if st, ok := ee.Context.Data["stacktrace"]; ok {
+		ee.StackTrace = st.(string)
+		delete(ee.Context.Data, "stacktrace")
 	}
 
 	// When using WithError(), the error is sent separately, but Error

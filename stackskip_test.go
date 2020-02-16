@@ -19,7 +19,6 @@ func TestStackSkip(t *testing.T) {
 	logger.Formatter = NewFormatter(
 		WithService("test"),
 		WithVersion("0.1"),
-		WithStackSkip("github.com/fingo-inc/logrus-stackdriver-formatter/test"),
 	)
 
 	mylog := test.LogWrapper{
